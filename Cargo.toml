@@ -1,0 +1,24 @@
+[package]
+name = "hermite_rust_module"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "hermite_rust_module"
+crate-type = ["cdylib"]
+
+[profile.dev]
+opt-level = 2               # Use slightly better optimizations.
+overflow-checks = false     # Disable integer overflow checks for BigInts.
+
+[dependencies]
+pyo3 = { version = "0.22.4", features = ["extension-module", "num-bigint"] }
+num-bigint = { version = "^0.4.6" }
+num = { version = "^0.4.3" }
+
+[features]
+verify-assumptions = []
+verify-indexes = []
+verify-matrices = []
+verify = ["verify-assumptions", "verify-indexes", "verify-matrices"]
+default = []
