@@ -33,7 +33,7 @@ fn nullspace<'py>(
     a_cols: &'py Bound<'py, PyAny>,
     a_data: &'py Bound<'py, PyAny>,
     dtype: i32,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<pyo3::PyAny>> {
     let rows: usize = a_rows
         .extract()
         .map_err(|_| PyValueError::new_err("Expected usize rows"))?;
@@ -45,7 +45,7 @@ fn nullspace<'py>(
         0 => {
             let data: Vec<BigInt> = a_data
                 .extract()
-                .map_err(|_| PyValueError::new_err("Expected a list of integer tuples"))?;
+                .map_err(|_| PyValueError::new_err("Expected a list of integers"))?;
             let matrix_a = Matrix::new(rows, cols, data);
             let builder = NullspaceBuilder::new(matrix_a);
             let decomp = unnormalized_row_echelon_form_builder::<
@@ -122,59 +122,93 @@ fn qr<'py>(
     a_rows: &'py Bound<'py, PyAny>,
     a_cols: &'py Bound<'py, PyAny>,
     a_data: &'py Bound<'py, PyAny>,
-) -> PyResult<(PyObject, PyObject)> {
+    dtype: i32,
+) -> PyResult<(Py<pyo3::PyAny>, Py<pyo3::PyAny>)> {
     let rows: usize = a_rows
         .extract()
         .map_err(|_| PyValueError::new_err("Expected usize rows"))?;
     let cols: usize = a_cols
         .extract()
         .map_err(|_| PyValueError::new_err("Expected usize cols"))?;
-    let data_tuple: Vec<Bound<'py, PyTuple>> = a_data
-        .extract()
-        .map_err(|_| PyValueError::new_err("Expected a list of integer tuples"))?;
-    let data = data_tuple
-        .into_iter()
-        .map(|py_tuple: Bound<'py, PyTuple>| {
-            let (x, y) = py_tuple.extract::<(BigInt, BigInt)>()?;
-            Ok(BigRational::new(x, y))
-        })
-        .collect::<PyResult<Vec<BigRational>>>()?;
 
-    let matrix_a = Matrix::new(rows, cols, data);
+    let (q_py, r_py): (Bound<'_, PyList>, Bound<'_, PyList>) = match dtype {
+        0 => {
+            let data: Vec<BigInt> = a_data
+                .extract()
+                .map_err(|_| PyValueError::new_err("Expected a list of integers"))?;
+            let matrix_a = Matrix::new(rows, cols, data);
+            let builder = QRDecompositionBuilder::new(matrix_a);
+            let decomp = unnormalized_row_echelon_form_builder::<
+                BigInt,
+                Vec<BigInt>,
+                QRDecomposition<BigInt, Vec<BigInt>>,
+                QRDecompositionBuilder<BigInt, Vec<BigInt>>,
+            >(builder);
+            let (q, r) = QRDecomposition::build(decomp);
 
-    let builder = QRDecompositionBuilder::new(matrix_a);
-    let decomp = unnormalized_row_echelon_form_builder::<
-        BigRational,
-        Vec<BigRational>,
-        QRDecomposition<BigRational, Vec<BigRational>>,
-        QRDecompositionBuilder<BigRational, Vec<BigRational>>,
-    >(builder);
-    let (q, r) = QRDecomposition::build(decomp);
+            (matrix_to_list(py, q), matrix_to_list(py, r))
+        }
+        1 => {
+            let data_tuple: Vec<Bound<'py, PyTuple>> = a_data
+                .extract()
+                .map_err(|_| PyValueError::new_err("Expected a list of integer tuples"))?;
+            let data = data_tuple
+                .into_iter()
+                .map(|py_tuple: Bound<'py, PyTuple>| {
+                    let (x, y) = py_tuple.extract::<(BigInt, BigInt)>()?;
+                    Ok(BigRational::new(x, y))
+                })
+                .collect::<PyResult<Vec<BigRational>>>()?;
+            let matrix_a = Matrix::new(rows, cols, data);
 
-    let t_py = matrix_to_list(py, &q);
-    let r_py = matrix_to_list(py, &r);
+            let builder = QRDecompositionBuilder::new(matrix_a);
+            let decomp = unnormalized_row_echelon_form_builder::<
+                BigRational,
+                Vec<BigRational>,
+                QRDecomposition<BigRational, Vec<BigRational>>,
+                QRDecompositionBuilder<BigRational, Vec<BigRational>>,
+            >(builder);
+            let (q, r) = QRDecomposition::build(decomp);
 
-    Ok((t_py.to_object(py), r_py.to_object(py)))
+            (matrix_to_list(py, q), matrix_to_list(py, r))
+        }
+        _ => {
+            panic!("Not implemented");
+        }
+    };
+
+    Ok((q_py.to_object(py), r_py.to_object(py)))
 }
 
-fn matrix_to_list<'py>(
-    py: Python<'py>,
-    mx: &Matrix<BigRational, Vec<BigRational>>,
-) -> pyo3::Bound<'py, PyList> {
+trait TransferDatatypeConvertible {
+    fn convert(self, py: Python<'_>) -> Bound<'_, pyo3::PyAny>;
+}
+
+impl TransferDatatypeConvertible for BigInt {
+    fn convert(self, py: Python<'_>) -> Bound<'_, pyo3::PyAny> {
+        self.to_object(py).into_bound(py)
+    }
+}
+
+impl TransferDatatypeConvertible for BigRational {
+    fn convert(self, py: Python<'_>) -> Bound<'_, pyo3::PyAny> {
+        self.into_raw().to_object(py).into_bound(py)
+    }
+}
+
+fn matrix_to_list<T>(py: Python<'_>, mx: Matrix<T, Vec<T>>) -> pyo3::Bound<'_, PyList>
+where
+    T: Clone + TransferDatatypeConvertible,
+{
     let (rows, cols) = (mx.rows, mx.cols);
 
+    let mut mx_data = mx.data.into_iter().map(|elem| elem.convert(py));
     // Reshape the Rust Vec into a list of lists (nested Python list)
     PyList::new_bound(
         py,
         (0..rows).map(|i| {
             let start = i * cols;
-            let end = start + cols;
-            PyList::new_bound(
-                py,
-                mx.data[start..end]
-                    .iter()
-                    .map(|elem| (elem.numer(), elem.denom()).to_object(py)),
-            )
+            PyList::new_bound(py, (start..(start + cols)).map(|_| mx_data.next()))
         }),
     )
 }
