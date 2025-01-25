@@ -19,7 +19,7 @@ use matrix_algorithms::{
 };
 
 #[pymodule]
-fn hermite_rust_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn libringkit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nullspace, m)?)?;
     m.add_function(wrap_pyfunction!(qr, m)?)?;
 
